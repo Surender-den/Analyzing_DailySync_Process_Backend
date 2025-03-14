@@ -2,19 +2,18 @@ const {Client} = require('pg');
 const dotenv = require('dotenv');
 const path = require('path');
 const { channel } = require('diagnostics_channel');
-const { report } = require('process');
 const { log } = require('console');
-const { type } = require('os');
 dotenv.config({path:path.join(__dirname,'..','config','config.env')});
 
 const MAX_RETRIES = 5; // Maximum retry attempts
 
-const AjioController = async () => {
+const SnapdealController = async () => {
     let client = null;
     let attempts = 0;
-     while (attempts < MAX_RETRIES) {
-          attempts++;
-          console.log(`Attempt ${attempts} to process Ajio Error stats...`);
+    while (attempts < MAX_RETRIES) {
+      attempts++;
+      console.log(`Attempt ${attempts} to process Snapdeal Error stats...`);
+
     try{
         // Database connection setup
         const dbConfig = {
@@ -32,26 +31,23 @@ const AjioController = async () => {
           client = new Client(dbConfig);
           await client.connect();
       
-          const targetChannel = 'Ajio';
+          const targetChannel = 'Snapdeal';
       
           // Step 1: Fetch orgid and channel
           const orgChannelQuery = `
             SELECT DISTINCT(org.orgId) AS org_id, org.channel
             FROM "fs-organisations-channels-db" AS org
             JOIN organisation AS i ON org.orgid = i.org_id 
-            WHERE org.channel = $1 and org.orgId!=10
+            WHERE org.channel = $1
               AND isSyncDisabled IS NOT TRUE
               AND (isDisabled != TRUE OR isDisabled IS NULL)
               AND (isDisconnected != TRUE OR isDisconnected IS NULL);
           `;
           const orgChannelResult = await client.query(orgChannelQuery, [targetChannel]);
           const orgChannels = orgChannelResult.rows;
-          // console.log(orgChannels);
-          // return
-          
       
           if (orgChannels.length === 0) {
-            console.log('No valid orgIds found for Ajio.');
+            console.log('No valid orgIds found for Snapdeal.');
             return;
           }
       
@@ -78,14 +74,7 @@ const AjioController = async () => {
               AND channel = $2;
           `;
           
-          
-          
           const reportValidationResult = await client.query(reportValidationQuery, [orgIds, targetChannel]);
-          // console.log(reportValidationResult.rows);
-          // return
-          
-        
-          
       
           // Step 4: Process and calculate stats
           const channelStats = {
@@ -112,55 +101,68 @@ const AjioController = async () => {
             reportsByOrgChannel[key].push(row);
           });
       
+          const sourceName = [
+            'RETURN_TRACKING', 'EstimateCalculation', 'RTN_CREATED', 
+            'UnsettledTransaction', 'SettledTransaction', 'Orders', 
+            'Inventory', 'SnapdealAds'
+          ];
+          
           orgChannels.forEach(({ org_id, channel }) => {
             const key = `${org_id}_${channel}`;
             channelStats.total += 1;
-      
-            const syncRequest = reportsByOrgChannel[key] || [];
-          // console.log(syncRequest);
           
-          const sourceName = ['Profitability-Ajio','Orders','Soa','Return','Inventory']
-            if (!syncRequest) {
+            const reports = reportsByOrgChannel[key] || [];
+          
+            if (reports.length === 0) {
               channelStats.sync_request_not_happen += 1;
               channelStats.sync_request_not_happen_orgIds.push(org_id);
               return;
             }
-           
-           
-            const status = (syncRequest[0]?.status || '').toUpperCase();
-          //  console.log(reportValidationQuery.rows.orgid);
-          //  return
-           const reports = reportsByOrgChannel[key] || [];
-            if (status === 'COMPLETED'|| status === 'PROFIT TRIGGER') {
-              
-              const completedReports = reports.filter(
-                report => report.report_type && report.status && (report.status.toUpperCase() === 'COMPLETED' || report.status.toUpperCase() ===  'PROFIT TRIGGER')
+          
+            const status = (reports[0]?.status || '').toUpperCase();
+          
+            if (status === 'COMPLETED' || status === 'PROFIT TRIGGER') {
+              const completedReports = reports.filter(report => 
+                report.status.toUpperCase() === 'COMPLETED' || report.status.toUpperCase() === 'PROFIT TRIGGER'
               );
-              
-              const matchingReports = completedReports.map(report => report.report_type)
-
-              
-              
-              
-
-              if (sourceName.every(type=> matchingReports.includes(type))){
+          
+              const matchingReports = completedReports.filter(report => sourceName.includes(report.report_type));
+              const notMatchingReports = completedReports.filter(report => !sourceName.includes(report.report_type));
+          
+              if (matchingReports.length > 0) {
                 channelStats.completed += 1;
-                // console.log(org_id,reports.map(report=> report.report_type));
-                // console.log(org_id,reports.map(report=> ({type:report.report_type, message:report.message})));
-
-              } else  {
-                
+              } else {
                 channelStats.notCompleted += 1;
-                
-              //  console.log(org_id);
-               
-
-                
+                console.log(`Not Completed Reports for OrgID: ${org_id}`);
               }
-
-               //  Handle Reports That Did Not Complete
+          
+              if (notMatchingReports.length > 0) {
+                // console.log(` Reports Not Matching SourceName for OrgID: ${org_id}`);
+                notMatchingReports.forEach(report => {
+                  console.log(`${org_id}, Report Type: ${report.report_type}, Status: ${report.status}, Message: ${report.message}`);
+                });
+              }
+          
+            } 
+            else if (status === 'PROCESSING') {
+              channelStats.processing += 1;
+            //   // console.log(` Processing Reports for OrgID: ${org_id}`);
+            //   reports.forEach(report => {
+            //     console.log(`${org_id}, Report Type: ${report.report_type}, Status: ${report.status}, Message: ${report.message}`);
+            //   });
+          
+            } 
+            else {
+              channelStats.notCompleted += 1;
+            //   // console.log(` Reports Not Matching Any Condition for OrgID: ${org_id}`);
+            //   reports.forEach(report => {
+            //     console.log(`${org_id}, Report Type: ${report.report_type}, Status: ${report.status}, Message: ${report.message}`);
+            //   });
+            }
+          
+            //  Handle Reports That Exist in `sourceName` But Did Not Complete
             const reportsNotCompleted = reports.filter(report => 
-               report.status.toUpperCase() === 'ERROR'|| report.status.toUpperCase() === 'FAILED' || report.status.toUpperCase() === null
+              sourceName.includes(report.report_type) && report.status.toUpperCase() !== 'COMPLETED'
             );
           
             if (reportsNotCompleted.length > 0) {
@@ -169,31 +171,30 @@ const AjioController = async () => {
                 console.log(`${org_id}, Report Type: ${report.report_type}, Status: ${report.status}, Message: ${report.message}`);
               });
             }
-            } else if (status === 'PROCESSING') {
-              channelStats.processing += 1;
-            } else {
-              // console.log(org_id);
-                             
-
-              channelStats.notCompleted += 1;
-              console.log(org_id,reports.map(report=> ({type:report.report_type, message:report.message})));
-              
-            }
-
+            
             // Get all report types that exist for this org_id
-            const existingReportTypes = reports.map(report => report.report_type);
+              const existingReportTypes = reports.map(report => report.report_type);
 
-            // Find missing report types from sourceName that are not in existing reports
-            const missingReports = sourceName.filter(type => !existingReportTypes.includes(type));
+              // Find missing report types from sourceName that are not in existing reports
+              const missingReports = sourceName.filter(type => !existingReportTypes.includes(type));
 
-            if (missingReports.length > 0) {
-              console.log(` Missing Reports for OrgID: ${org_id}`);
-              missingReports.forEach(missingType => {
-                console.log(`${org_id}, Report Type: ${missingType}, Status: NOT GENERATED`);
-              });
-            }
-          });
-      
+              if (missingReports.length > 0) {
+                console.log(` Missing Reports for OrgID: ${org_id}`);
+                missingReports.forEach(missingType => {
+                  console.log(`${org_id}, Report Type: ${missingType}, Status: NOT GENERATED`);
+                });
+              }
+
+
+
+
+
+          } );
+
+         
+        
+          
+          
           // Log results to the terminal
           console.log(`Channel: ${targetChannel}`);
           console.table({
@@ -205,17 +206,17 @@ const AjioController = async () => {
           });
           console.log('OrgIds for Sync_Request_Not_Happen:', channelStats.sync_request_not_happen_orgIds);
           break;
-          
         } catch (error) {
           console.error(`Error occurred on attempt ${attempts}:`, error.message);
-          
-                if (attempts >= MAX_RETRIES) {
-                  console.error('Max retry attempts reached. Exiting process.');
-                  break;
-                }
-          
-                console.log(`Retrying in 5 seconds...`);
-                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
+
+      if (attempts >= MAX_RETRIES) {
+        console.error('Max retry attempts reached. Exiting process.');
+        break;
+      }
+
+      console.log(`Retrying in 5 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
+
         } finally {
           if (client) {
             await client.end();
@@ -223,5 +224,5 @@ const AjioController = async () => {
         }
       }
       };
-      
-module.exports = AjioController;
+        
+module.exports = SnapdealController;

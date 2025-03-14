@@ -5,6 +5,7 @@ const AmazonVCPController = require('./controllers/AmazonVCPController');
 const FlipkartController = require('./controllers/FlipkartController');
 const MeeshoController = require('./controllers/MeeshoController');
 const ShopifyController = require('./controllers/ShopifyController');
+const SnapdealController = require('./controllers/SnapdealController');
 (async () => {
   console.log('Processing Amazon-India stats...');
   await AmazonIndiaController();
@@ -24,5 +25,9 @@ const ShopifyController = require('./controllers/ShopifyController');
   console.log('Processing AmazonVCP stats...');
   await AmazonVCPController();
 
+  console.log('Processing Snapdeal stats...');
+  await SnapdealController();
+
+  
   
 })();

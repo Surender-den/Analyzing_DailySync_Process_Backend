@@ -4,8 +4,14 @@ const path = require('path');
 const { channel } = require('diagnostics_channel');
 dotenv.config({path:path.join(__dirname,'..','config','config.env')});
 
+const MAX_RETRIES = 5; // Maximum retry attempts
+
 const MeeshoController = async () => {
     let client = null;
+    let attempts = 0;
+  while (attempts < MAX_RETRIES) {
+       attempts++;
+       console.log(`Attempt ${attempts} to process Meesho Error stats...`);
     try{
         // Database connection setup
         const dbConfig = {
@@ -137,13 +143,23 @@ const MeeshoController = async () => {
             Sync_Request_Not_Happen: channelStats.sync_request_not_happen,
           });
           console.log('OrgIds for Sync_Request_Not_Happen:', channelStats.sync_request_not_happen_orgIds);
+          break;
         } catch (error) {
-          console.error('Error:', error);
+          console.error(`Error occurred on attempt ${attempts}:`, error.message);
+          
+          if (attempts >= MAX_RETRIES) {
+            console.error('Max retry attempts reached. Exiting process.');
+            break;
+          }
+      
+          console.log(`Retrying in 5 seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
         } finally {
           if (client) {
             await client.end();
           }
         }
+      }
       };
       
 module.exports = MeeshoController;

@@ -5,8 +5,15 @@ const { channel } = require('diagnostics_channel');
 const { log } = require('console');
 dotenv.config({path:path.join(__dirname,'..','config','config.env')});
 
+const MAX_RETRIES = 5; // Maximum retry attempts
+
 const AmazonVCPController = async () => {
     let client = null;
+    let attempts = 0;
+    while (attempts < MAX_RETRIES) {
+      attempts++;
+      console.log(`Attempt ${attempts} to process AmazonVCP Error stats...`);
+
     try{
         // Database connection setup
         const dbConfig = {
@@ -60,7 +67,7 @@ const AmazonVCPController = async () => {
       
           // Step 3: Validate reports
           const reportValidationQuery = `
-            SELECT orgid, channel, report_type, status
+            SELECT orgid, channel, report_type, status,message
             FROM fs_upload
             WHERE created_at > (CURRENT_DATE - INTERVAL '1 day') + INTERVAL '14:30'
               AND orgid = ANY($1)
@@ -127,8 +134,10 @@ const AmazonVCPController = async () => {
                 channelStats.completed += 1;
               } else {
                 channelStats.notCompleted += 1;
+                // console.log(org_id,reports.map(report=> ({type:report.report_type, message:report.message})));
+
               }
-            } else if (status === 'PROCESSING') {
+            } else if (status === 'PROCESSING' || 'Processing') {
               channelStats.processing += 1;
             } else {
               channelStats.notCompleted += 1;
@@ -145,13 +154,24 @@ const AmazonVCPController = async () => {
             Sync_Request_Not_Happen: channelStats.sync_request_not_happen,
           });
           console.log('OrgIds for Sync_Request_Not_Happen:', channelStats.sync_request_not_happen_orgIds);
+          break;
         } catch (error) {
-          console.error('Error:', error);
+          console.error(`Error occurred on attempt ${attempts}:`, error.message);
+
+      if (attempts >= MAX_RETRIES) {
+        console.error('Max retry attempts reached. Exiting process.');
+        break;
+      }
+
+      console.log(`Retrying in 5 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retrying
+
         } finally {
           if (client) {
             await client.end();
           }
         }
+      }
       };
-      
-module.exports = AmazonVCPController;
+        
+module.exports = AmazonVCPController
